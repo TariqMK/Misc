@@ -8,5 +8,8 @@ This way of using a frontend and backend means we do not have to change the syst
 ## Requirements
 These scripts work on the Windows OS
 
+## How to Run
+Open the CMD Frontend file with administrative privileges. Ensure all relevant parts of both scripts are filled in with the required information. 
+
 ## Intended Result
 A directory of your choice will be compressed into a single file and sent to a destination of your choosing. The name this compressed file will have will contain the date of the backup in a sustainable format (`YYYY-MM-DD`) for long term ease of use.
