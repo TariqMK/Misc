@@ -1,0 +1,13 @@
+/* ==highlight== background colour */
+body {
+	--text-highlight-bg: rgba(255, 208, 0, 1.0);
+}
+
+/* ==highlight== text colour */
+.theme-dark .cm-s-obsidian span.cm-highlight, .markdown-rendered mark {
+    color: black;
+}
+
+.theme-dark .search-result-file-matched-text {
+    color: black;
+}
