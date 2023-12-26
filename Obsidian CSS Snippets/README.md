@@ -11,9 +11,14 @@ Note that I have collected these snippets from others, patched bits together usi
 ## Snippets
 Below is a brief explanation of the Snippets I have shared and any relevant information.
 
+#### Enhanced Bold Formatting
+- The normal bold format doesnt stand out too much in my opinion, this CSS snippet changes the colour of bold text (changing it here particularly to an orange colour)
+- Source: https://forum.obsidian.md/t/easy-css-change-colored-bolding/61710/2
+
 #### Centre Images by Default
 - Self explanatory, this snippet will centre all images across your Vault. I didnt like having them left aligned by default and this solves the problem
-- Source: https://forum.obsidian.md/t/displaying-images-centered-by-default/27463/2?
+- Source: https://forum.obsidian.md/t/displaying-images-centered-by-default/27463/2
 
 #### Yellow Highlight + Black Text
 - I wanted highlights rendered in Obsidian to resemble the type of highlighting we would experience on a physical paper, this snippet makes the highlight colour an opaque bright yellow and ensures that the text within is always black regardless of what theme you are using (light or dark)
+- Source: https://forum.obsidian.md/t/how-can-i-change-highlight-colour-highlighted-text-colour-no-plugins-please/73345/9
