@@ -1,26 +1,40 @@
 import os
 import re
 
-def parse_clippings(file_path):
+def clean_file(file_path):
+    with open(file_path, "r", encoding="utf-8") as file:
+        content = file.read()
+
+    lines = content.split("\n")
+    new_lines = []
+    last_bookmark_position = -1
+
+    for i, line in enumerate(lines):
+        if ("Your Bookmark" in line):
+            new_lines.pop()
+            last_bookmark_position = i
+        if (last_bookmark_position == -1 or not i - last_bookmark_position < 4):
+            new_lines.append(line)
+
+    file_content = "\n".join(new_lines)
+    return file_content
+
+
+def parse_clippings(content):
     # A dictionary to store highlights by book title
     books = {}
     
     # Regular expression pattern to capture the book title, author, location, and highlight text
     pattern = r"(.*?) \((.*?)\)\n- (Your Highlight on .*? \| location .*?|Your Highlight at location .*?|Your Highlight on page .*?|Highlight on Page .*?)\n\n(.*?)\n=========="
-    
-    # Read the entire MyClippings.txt file content
-    with open(file_path, 'r', encoding='utf-8') as file:
-        content = file.read()
         
     # Find all matches of the pattern in the file content
     matches = re.findall(pattern, content, re.DOTALL)
     
-    # Debug: Check how many matches were found and print them
     print(f"Found {len(matches)} highlights.")  # Shows how many highlights are captured
     
     # Loop through each match to organize the highlights
     for match in matches:
-        book_title = match[0].strip()  # Get the book title
+        book_title = match[0].strip().encode('utf-8').decode('utf-8-sig').strip()  # Remove BOM
         author = match[1].strip()  # Get the author
         highlight_source = match[2].strip()  # Get the highlight source information
         highlight_text = match[3].strip()  # Get the highlighted text
@@ -86,5 +100,5 @@ def save_highlights(books):
 file_path = 'My Clippings.txt'
 
 # Parse the clippings and save them by book
-books = parse_clippings(file_path)
+books = parse_clippings(clean_file(file_path))
 save_highlights(books)
