@@ -12,7 +12,7 @@ Details for each individual script are as below.
 
 ---
 
-## 'My Clippings.txt' Highlight Parser.py
+## MyClippings Highlight Parser.py
 
 **Intent:**
 
