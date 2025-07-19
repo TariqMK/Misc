@@ -28,6 +28,12 @@ This script takes `My Clippings.txt` as the input, scans it for all highlights, 
   - If this folder does not exist, it will be created
 - When the script has been run, a summary of books and highlights processed will be displayed in the terminal
 
+Example:
+
+<p align="center">
+  <img width="690" height="134" alt="image" src="https://github.com/user-attachments/assets/e83f1a50-314a-4540-b1f6-9b1c4571854e" />
+</p>
+
 **Known Issues:**
 
 - Over the years, Amazon has slightly changed the syntax of highlight metadata within `My Clippings.txt`. This script works best for files from 2020 onwards, but still works well for older files, though you may notice some formatting inconsistencies
