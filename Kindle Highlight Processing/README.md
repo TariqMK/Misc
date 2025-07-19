@@ -20,16 +20,14 @@ The highlights contained within `My Clippings.txt` contain entries from all the 
 
 This script takes `My Clippings.txt` as the input, scans it for all highlights, recognises if there are multiple books and then outputs a text file per book containing all related higlights.
 
-**Specifics:**
+**Usage Specifics:**
 
 - The `My Clippings.txt` file must be placed in the same directory as the script
 - The `My Clippings.txt` file must not be renamed, otherwise it will not be detected
 - The new text files for each related book will be placed in a new folder in the same directory named `Highlights_by_Book`
+  - If this folder does not exist, it will be created
 - When the script has been run, a summary of books and highlights processed will be displayed in the terminal
 
 **Known Issues:**
 
 - Over the years, Amazon has slightly changed the syntax of highlight metadata within `My Clippings.txt`. This script works best for files from 2020 onwards, but still works well for older files, though you may notice some formatting inconsistencies
-
-
-
