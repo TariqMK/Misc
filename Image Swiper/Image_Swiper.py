@@ -17,9 +17,14 @@ class ImageOrganizer:
         self.current_index = 0
         self.photo = None
         self.random_mode = False
+        self.last_deleted = None  # Track last deleted image for undo
         
-        # Supported image formats
-        self.image_extensions = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.ico'}
+        # Supported image formats (expanded)
+        self.image_extensions = {
+            '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', 
+            '.ico', '.heic', '.heif', '.jfif', '.ppm', '.pgm', '.pbm', '.pnm',
+            '.svg', '.raw', '.cr2', '.nef', '.arw', '.dng', '.orf'
+        }
         
         self.setup_ui()
         self.bind_keys()
@@ -87,10 +92,10 @@ class ImageOrganizer:
         button_frame = tk.Frame(self.root, bg='#2b2b2b', pady=20)
         button_frame.pack()
         
-        # Delete button (Left)
+        # Delete button (Q key)
         self.delete_btn = tk.Button(
             button_frame,
-            text="✕ DELETE\n(← or D)",
+            text="✕ DELETE\n(Q)",
             command=self.delete_image,
             bg='#f44336',
             fg='white',
@@ -102,10 +107,25 @@ class ImageOrganizer:
         )
         self.delete_btn.pack(side=tk.LEFT, padx=20)
         
-        # Keep button (Right)
+        # Undo button
+        self.undo_btn = tk.Button(
+            button_frame,
+            text="↶ UNDO\n(Backspace)",
+            command=self.undo_delete,
+            bg='#FF9800',
+            fg='white',
+            font=('Arial', 14, 'bold'),
+            width=15,
+            height=3,
+            cursor='hand2',
+            state=tk.DISABLED
+        )
+        self.undo_btn.pack(side=tk.LEFT, padx=20)
+        
+        # Keep button (W key)
         self.keep_btn = tk.Button(
             button_frame,
-            text="✓ KEEP\n(→ or K)",
+            text="✓ KEEP\n(W)",
             command=self.keep_image,
             bg='#4CAF50',
             fg='white',
@@ -120,7 +140,7 @@ class ImageOrganizer:
         # Instructions
         instructions = tk.Label(
             self.root,
-            text="Keyboard shortcuts: ← or D = Delete | → or K = Keep | Backspace = Undo",
+            text="Keyboard shortcuts: Q = Delete | W = Keep | ← = Previous | → = Next | Backspace = Undo",
             bg='#2b2b2b',
             fg='#888888',
             font=('Arial', 9)
@@ -128,12 +148,13 @@ class ImageOrganizer:
         instructions.pack(pady=5)
         
     def bind_keys(self):
-        self.root.bind('<Left>', lambda e: self.delete_image())
-        self.root.bind('<Right>', lambda e: self.keep_image())
-        self.root.bind('d', lambda e: self.delete_image())
-        self.root.bind('D', lambda e: self.delete_image())
-        self.root.bind('k', lambda e: self.keep_image())
-        self.root.bind('K', lambda e: self.keep_image())
+        self.root.bind('<Left>', lambda e: self.previous_image())
+        self.root.bind('<Right>', lambda e: self.next_image())
+        self.root.bind('q', lambda e: self.delete_image())
+        self.root.bind('Q', lambda e: self.delete_image())
+        self.root.bind('w', lambda e: self.keep_image())
+        self.root.bind('W', lambda e: self.keep_image())
+        self.root.bind('<BackSpace>', lambda e: self.undo_delete())
         
     def select_folder(self):
         folder = filedialog.askdirectory(title="Select folder with images")
@@ -235,10 +256,25 @@ class ImageOrganizer:
         try:
             # Move to recycle bin
             winshell.delete_file(str(img_path), no_confirm=True, allow_undo=True)
+            self.last_deleted = img_path  # Store for undo
+            self.undo_btn.config(state=tk.NORMAL)  # Enable undo button
             self.current_index += 1
             self.show_current_image()
         except Exception as e:
             messagebox.showerror("Error", f"Could not delete file: {str(e)}")
+    
+    def undo_delete(self):
+        if not self.last_deleted:
+            return
+        
+        try:
+            # Restore from recycle bin using winshell
+            winshell.undelete(str(self.last_deleted))
+            messagebox.showinfo("Undo", f"Restored: {self.last_deleted.name}")
+            self.last_deleted = None
+            self.undo_btn.config(state=tk.DISABLED)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not restore file: {str(e)}\nYou may need to restore it manually from Recycle Bin.")
             
     def keep_image(self):
         if not self.images or self.current_index >= len(self.images):
@@ -247,6 +283,20 @@ class ImageOrganizer:
         # Just move to next image (keeping the current one)
         self.current_index += 1
         self.show_current_image()
+    
+    def previous_image(self):
+        if not self.images:
+            return
+        if self.current_index > 0:
+            self.current_index -= 1
+            self.show_current_image()
+    
+    def next_image(self):
+        if not self.images:
+            return
+        if self.current_index < len(self.images) - 1:
+            self.current_index += 1
+            self.show_current_image()
 
 if __name__ == "__main__":
     root = tk.Tk()
