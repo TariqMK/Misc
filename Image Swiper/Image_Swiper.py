@@ -210,6 +210,17 @@ class ImageOrganizer:
         img_path = self.images[self.current_index]
         
         try:
+            # Check if file exists (may have been deleted)
+            if not img_path.exists():
+                # File was deleted, skip to next valid image
+                if self.current_index < len(self.images) - 1:
+                    self.current_index += 1
+                    self.show_current_image()
+                elif self.current_index > 0:
+                    self.current_index -= 1
+                    self.show_current_image()
+                return
+            
             # Load and resize image to fit canvas
             img = Image.open(img_path)
             
@@ -287,16 +298,28 @@ class ImageOrganizer:
     def previous_image(self):
         if not self.images:
             return
-        if self.current_index > 0:
+        # Keep going back until we find an existing file
+        original_index = self.current_index
+        while self.current_index > 0:
             self.current_index -= 1
-            self.show_current_image()
+            if self.images[self.current_index].exists():
+                self.show_current_image()
+                return
+        # If no previous existing file found, stay at original
+        self.current_index = original_index
     
     def next_image(self):
         if not self.images:
             return
-        if self.current_index < len(self.images) - 1:
+        # Keep going forward until we find an existing file
+        original_index = self.current_index
+        while self.current_index < len(self.images) - 1:
             self.current_index += 1
-            self.show_current_image()
+            if self.images[self.current_index].exists():
+                self.show_current_image()
+                return
+        # If no next existing file found, stay at original
+        self.current_index = original_index
 
 if __name__ == "__main__":
     root = tk.Tk()
