@@ -6,6 +6,16 @@ from pathlib import Path
 import winshell
 import random
 
+# Register HEIC support
+heic_support = False
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    heic_support = True
+    print("HEIC support enabled")
+except Exception as e:
+    print(f"WARNING: HEIC support not available: {e}")
+
 class ImageOrganizer:
     def __init__(self, root):
         self.root = root
@@ -79,6 +89,15 @@ class ImageOrganizer:
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         # Filename label
+        self.path_label = tk.Label(
+            self.root,
+            text="",
+            bg='#2b2b2b',
+            fg='#888888',
+            font=('Arial', 9)
+        )
+        self.path_label.pack(pady=(5, 0))
+        
         self.filename_label = tk.Label(
             self.root,
             text="",
@@ -86,7 +105,7 @@ class ImageOrganizer:
             fg='#cccccc',
             font=('Arial', 10)
         )
-        self.filename_label.pack(pady=5)
+        self.filename_label.pack(pady=(0, 5))
         
         # Button frame
         button_frame = tk.Frame(self.root, bg='#2b2b2b', pady=20)
@@ -204,6 +223,7 @@ class ImageOrganizer:
             self.keep_btn.config(state=tk.DISABLED)
             self.counter_label.config(text="All done!")
             self.canvas.delete("all")
+            self.path_label.config(text="")
             self.filename_label.config(text="")
             return
             
@@ -222,7 +242,18 @@ class ImageOrganizer:
                 return
             
             # Load and resize image to fit canvas
-            img = Image.open(img_path)
+            # Special handling for HEIC files
+            if img_path.suffix.lower() in ['.heic', '.heif']:
+                import pillow_heif
+                heif_file = pillow_heif.read_heif(str(img_path))
+                img = Image.frombytes(
+                    heif_file.mode,
+                    heif_file.size,
+                    heif_file.data,
+                    "raw",
+                )
+            else:
+                img = Image.open(img_path)
             
             # Get canvas size
             self.root.update()
@@ -251,12 +282,22 @@ class ImageOrganizer:
             self.counter_label.config(
                 text=f"Image {self.current_index + 1} of {len(self.images)}"
             )
+            self.path_label.config(text=str(img_path.parent))
             self.filename_label.config(text=img_path.name)
             
         except Exception as e:
-            messagebox.showerror("Error", f"Could not load image: {str(e)}")
-            self.current_index += 1
-            self.show_current_image()
+            # Show error and let user decide what to do
+            error_msg = f"Could not load image: {img_path.name}\n\nError: {str(e)}\n\n"
+            if img_path.suffix.lower() in ['.heic', '.heif']:
+                error_msg += "This is a HEIC file. Make sure you have installed:\npip install pillow-heif\n\n"
+            error_msg += "Skip to next image?"
+            
+            if messagebox.askyesno("Error Loading Image", error_msg):
+                if self.current_index < len(self.images) - 1:
+                    self.current_index += 1
+                    self.show_current_image()
+                else:
+                    messagebox.showinfo("Done!", "No more images to display.")
             
     def delete_image(self):
         if not self.images or self.current_index >= len(self.images):
