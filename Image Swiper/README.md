@@ -16,7 +16,7 @@ Images kept will remain untouched, images selected for deletion will be sent to 
 - The following packages must be installed for the script to work:
 
 ```
-pip install Pillow pywin32 winshell
+pip install Pillow pywin32 winshell pillow-heif
 ```
 
 ## Usage
