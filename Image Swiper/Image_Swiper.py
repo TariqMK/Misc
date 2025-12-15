@@ -28,6 +28,10 @@ class ImageOrganizer:
         self.photo = None
         self.random_mode = False
         self.last_deleted = None  # Track last deleted image for undo
+        self.last_deleted_size = 0  # Track size of last deleted file for undo
+        self.processed_count = 0  # Track how many images reviewed
+        self.deleted_count = 0  # Track how many images deleted
+        self.space_saved_mb = 0  # Track MB saved from deletions
         
         # Supported image formats (expanded)
         self.image_extensions = {
@@ -79,6 +83,16 @@ class ImageOrganizer:
             cursor='hand2'
         )
         self.random_check.pack(side=tk.LEFT, padx=10)
+        
+        # Stats label
+        self.stats_label = tk.Label(
+            top_frame,
+            text="Processed: 0 | Deleted: 0 | Saved: 0 MB",
+            bg='#2b2b2b',
+            fg='#888888',
+            font=('Arial', 9)
+        )
+        self.stats_label.pack(side=tk.LEFT, padx=20)
         
         # Image display area
         self.canvas = tk.Canvas(
@@ -178,6 +192,10 @@ class ImageOrganizer:
     def select_folder(self):
         folder = filedialog.askdirectory(title="Select folder with images")
         if folder:
+            self.processed_count = 0
+            self.deleted_count = 0
+            self.space_saved_mb = 0
+            self.stats_label.config(text="Processed: 0 | Deleted: 0 | Saved: 0 MB")
             self.load_images(folder)
             
     def load_images(self, folder):
@@ -306,10 +324,19 @@ class ImageOrganizer:
         img_path = self.images[self.current_index]
         
         try:
+            # Get file size before deleting
+            file_size_bytes = img_path.stat().st_size
+            file_size_mb = file_size_bytes / (1024 * 1024)
+            
             # Move to recycle bin
             winshell.delete_file(str(img_path), no_confirm=True, allow_undo=True)
             self.last_deleted = img_path  # Store for undo
+            self.last_deleted_size = file_size_mb  # Store size for undo
             self.undo_btn.config(state=tk.NORMAL)  # Enable undo button
+            self.deleted_count += 1
+            self.processed_count += 1
+            self.space_saved_mb += file_size_mb
+            self.stats_label.config(text=f"Processed: {self.processed_count} | Deleted: {self.deleted_count} | Saved: {self.space_saved_mb:.1f} MB")
             self.current_index += 1
             self.show_current_image()
         except Exception as e:
@@ -325,6 +352,12 @@ class ImageOrganizer:
             messagebox.showinfo("Undo", f"Restored: {self.last_deleted.name}")
             self.last_deleted = None
             self.undo_btn.config(state=tk.DISABLED)
+            # Decrease counters
+            self.deleted_count -= 1
+            self.processed_count -= 1
+            self.space_saved_mb -= self.last_deleted_size
+            self.last_deleted_size = 0
+            self.stats_label.config(text=f"Processed: {self.processed_count} | Deleted: {self.deleted_count} | Saved: {self.space_saved_mb:.1f} MB")
         except Exception as e:
             messagebox.showerror("Error", f"Could not restore file: {str(e)}\nYou may need to restore it manually from Recycle Bin.")
             
@@ -333,6 +366,8 @@ class ImageOrganizer:
             return
             
         # Just move to next image (keeping the current one)
+        self.processed_count += 1
+        self.stats_label.config(text=f"Processed: {self.processed_count} | Deleted: {self.deleted_count} | Saved: {self.space_saved_mb:.1f} MB")
         self.current_index += 1
         self.show_current_image()
     
@@ -352,6 +387,9 @@ class ImageOrganizer:
     def next_image(self):
         if not self.images:
             return
+        # Increment processed count when navigating forward
+        self.processed_count += 1
+        self.stats_label.config(text=f"Processed: {self.processed_count} | Deleted: {self.deleted_count} | Saved: {self.space_saved_mb:.1f} MB")
         # Keep going forward until we find an existing file
         original_index = self.current_index
         while self.current_index < len(self.images) - 1:
