@@ -27,6 +27,7 @@ class ImageOrganizer:
         self.current_index = 0
         self.photo = None
         self.random_mode = False
+        self.include_subdirs = True
         self.last_deleted = None  # Track last deleted image for undo
         self.last_deleted_size = 0  # Track size of last deleted file for undo
         self.processed_count = 0  # Track how many images reviewed
@@ -83,6 +84,21 @@ class ImageOrganizer:
             cursor='hand2'
         )
         self.random_check.pack(side=tk.LEFT, padx=10)
+        
+        # Include subdirectories checkbox
+        self.subdirs_var = tk.BooleanVar(value=True)
+        self.subdirs_check = tk.Checkbutton(
+            top_frame,
+            text="Include Subdirectories",
+            variable=self.subdirs_var,
+            command=self.toggle_subdirs,
+            bg='#2b2b2b',
+            fg='white',
+            selectcolor='#1a1a1a',
+            font=('Arial', 10),
+            cursor='hand2'
+        )
+        self.subdirs_check.pack(side=tk.LEFT, padx=10)
         
         # Stats label
         self.stats_label = tk.Label(
@@ -202,10 +218,17 @@ class ImageOrganizer:
         self.images = []
         path = Path(folder)
         
-        # Recursively find all image files
-        for ext in self.image_extensions:
-            self.images.extend(path.rglob(f'*{ext}'))
-            self.images.extend(path.rglob(f'*{ext.upper()}'))
+        # Recursively or non-recursively find image files based on checkbox
+        if self.include_subdirs:
+            # Recursive search (subdirectories included)
+            for ext in self.image_extensions:
+                self.images.extend(path.rglob(f'*{ext}'))
+                self.images.extend(path.rglob(f'*{ext.upper()}'))
+        else:
+            # Non-recursive search (current folder only)
+            for ext in self.image_extensions:
+                self.images.extend(path.glob(f'*{ext}'))
+                self.images.extend(path.glob(f'*{ext.upper()}'))
         
         # Remove duplicates and sort
         self.images = sorted(list(set(self.images)))
@@ -222,6 +245,9 @@ class ImageOrganizer:
         self.show_current_image()
         self.delete_btn.config(state=tk.NORMAL)
         self.keep_btn.config(state=tk.NORMAL)
+    
+    def toggle_subdirs(self):
+        self.include_subdirs = self.subdirs_var.get()
     
     def toggle_random_mode(self):
         self.random_mode = self.random_var.get()
