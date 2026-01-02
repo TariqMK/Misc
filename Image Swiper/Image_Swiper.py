@@ -433,14 +433,22 @@ class ImageOrganizer:
             
             # Load and resize image
             if img_path.suffix.lower() in ['.heic', '.heif']:
-                import pillow_heif
-                heif_file = pillow_heif.read_heif(str(img_path))
-                img = Image.frombytes(
-                    heif_file.mode,
-                    heif_file.size,
-                    heif_file.data,
-                    "raw",
-                )
+                try:
+                    import pillow_heif
+                    heif_file = pillow_heif.read_heif(str(img_path))
+                    img = Image.frombytes(
+                        heif_file.mode,
+                        heif_file.size,
+                        heif_file.data,
+                        "raw",
+                    )
+                except Exception as heic_error:
+                    # Fallback: try opening with Pillow directly (some HEIC files work this way)
+                    try:
+                        img = Image.open(img_path)
+                    except:
+                        # If both methods fail, raise the original error
+                        raise heic_error
             else:
                 img = Image.open(img_path)
             
