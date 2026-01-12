@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import os
 from pathlib import Path
 import winshell
@@ -8,6 +8,8 @@ import random
 from datetime import datetime
 import piexif
 import sqlite3
+import subprocess
+import sys
 
 # Register HEIC support
 heic_support = False
@@ -22,7 +24,7 @@ except Exception as e:
 class ImageOrganizer:
     def __init__(self, root):
         self.root = root
-        self.root.title("Image Organizer - Swipe to Decide")
+        self.root.title("Image & Video Organizer - Swipe to Decide")
         self.root.geometry("900x700")
         self.root.configure(bg='#2b2b2b')
         
@@ -37,24 +39,44 @@ class ImageOrganizer:
         self.processed_count = 0
         self.deleted_count = 0
         self.space_saved_mb = 0
+        self.current_file_is_video = False
         
-        # Database setup - stored next to script
+        # Database setup
         script_dir = Path(__file__).parent
         self.db_path = script_dir / "OnThisDay_cache.db"
+        self.thumbnails_dir = script_dir / "OnThisDay_thumbnails"
+        self.thumbnails_dir.mkdir(exist_ok=True)
         self.init_database()
         
-        # Supported image formats (expanded)
+        # Check for ffmpeg
+        self.ffmpeg_available = self.check_ffmpeg()
+        if not self.ffmpeg_available:
+            print("WARNING: ffmpeg not found. Video thumbnails will not be generated.")
+            print("Install ffmpeg and add to PATH for video support.")
+        
+        # Supported formats
         self.image_extensions = {
             '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', 
             '.ico', '.heic', '.heif', '.jfif', '.ppm', '.pgm', '.pbm', '.pnm',
             '.svg', '.raw', '.cr2', '.nef', '.arw', '.dng', '.orf'
         }
         
+        self.video_extensions = {
+            '.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v',
+            '.mpg', '.mpeg', '.3gp', '.m2ts', '.mts', '.ts', '.vob', '.ogv'
+        }
+        
         self.setup_ui()
         self.bind_keys()
     
+    def check_ffmpeg(self):
+        try:
+            subprocess.run(['ffmpeg', '-version'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            return True
+        except:
+            return False
+    
     def init_database(self):
-        """Initialize SQLite database for caching image metadata"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('''
@@ -62,53 +84,117 @@ class ImageOrganizer:
                 filepath TEXT PRIMARY KEY,
                 date_taken TEXT,
                 file_size INTEGER,
-                last_modified REAL
+                last_modified REAL,
+                is_video INTEGER,
+                thumbnail_path TEXT
             )
         ''')
+        
+        # Migration: Add is_video and thumbnail_path columns if they don't exist
+        try:
+            cursor.execute("SELECT is_video FROM image_cache LIMIT 1")
+        except sqlite3.OperationalError:
+            print("Migrating database: adding is_video column...")
+            cursor.execute("ALTER TABLE image_cache ADD COLUMN is_video INTEGER DEFAULT 0")
+        
+        try:
+            cursor.execute("SELECT thumbnail_path FROM image_cache LIMIT 1")
+        except sqlite3.OperationalError:
+            print("Migrating database: adding thumbnail_path column...")
+            cursor.execute("ALTER TABLE image_cache ADD COLUMN thumbnail_path TEXT")
+        
         conn.commit()
         conn.close()
         print(f"Database initialized at: {self.db_path}")
     
-    def get_cached_date(self, img_path):
-        """Get date from cache, or extract and cache it if not found"""
+    def get_video_date(self, video_path):
+        if not self.ffmpeg_available:
+            return datetime.fromtimestamp(video_path.stat().st_mtime)
+        
+        try:
+            result = subprocess.run(
+                ['ffprobe', '-v', 'quiet', '-print_format', 'json', 
+                 '-show_entries', 'format_tags=creation_time', str(video_path)],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            import json
+            data = json.loads(result.stdout)
+            
+            if 'format' in data and 'tags' in data['format']:
+                creation_time = data['format']['tags'].get('creation_time')
+                if creation_time:
+                    # Parse ISO 8601 format and remove timezone info for consistency
+                    dt = datetime.fromisoformat(creation_time.replace('Z', '+00:00'))
+                    return dt.replace(tzinfo=None)  # Strip timezone
+        except:
+            pass
+        
+        return datetime.fromtimestamp(video_path.stat().st_mtime)
+    
+    def generate_video_thumbnail(self, video_path):
+        if not self.ffmpeg_available:
+            return None
+        
+        thumb_name = f"{hash(str(video_path))}.jpg"
+        thumb_path = self.thumbnails_dir / thumb_name
+        
+        if thumb_path.exists():
+            return thumb_path
+        
+        try:
+            subprocess.run(
+                ['ffmpeg', '-i', str(video_path), '-ss', '00:00:01', 
+                 '-vframes', '1', '-q:v', '2', str(thumb_path)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=True
+            )
+            
+            if thumb_path.exists():
+                return thumb_path
+        except:
+            pass
+        
+        return None
+    
+    def get_cached_date(self, file_path):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Check if file exists in cache and hasn't been modified
-        cursor.execute('SELECT date_taken, last_modified FROM image_cache WHERE filepath = ?', 
-                      (str(img_path),))
+        cursor.execute('SELECT date_taken, last_modified FROM image_cache WHERE filepath = ?', (str(file_path),))
         result = cursor.fetchone()
         
-        current_mtime = img_path.stat().st_mtime
+        current_mtime = file_path.stat().st_mtime
         
-        # If cached and file hasn't changed, use cached date
         if result and result[1] == current_mtime:
             conn.close()
             if result[0]:
                 return datetime.fromisoformat(result[0])
             return None
         
-        # Otherwise, extract date and update cache
-        img_date = self.extract_image_date(img_path)
-        file_size = img_path.stat().st_size
+        is_video = file_path.suffix.lower() in self.video_extensions
+        
+        if is_video:
+            file_date = self.get_video_date(file_path)
+            thumbnail_path = self.generate_video_thumbnail(file_path)
+        else:
+            file_date = self.extract_image_date(file_path)
+            thumbnail_path = None
+        
+        file_size = file_path.stat().st_size
         
         cursor.execute('''
-            INSERT OR REPLACE INTO image_cache (filepath, date_taken, file_size, last_modified)
-            VALUES (?, ?, ?, ?)
-        ''', (str(img_path), 
-              img_date.isoformat() if img_date else None,
-              file_size,
-              current_mtime))
+            INSERT OR REPLACE INTO image_cache (filepath, date_taken, file_size, last_modified, is_video, thumbnail_path)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (str(file_path), file_date.isoformat() if file_date else None, file_size, current_mtime,
+              1 if is_video else 0, str(thumbnail_path) if thumbnail_path else None))
         
         conn.commit()
         conn.close()
         
-        return img_date
+        return file_date
     
     def extract_image_date(self, img_path):
-        """Extract date from EXIF data, fall back to file modification date"""
         try:
-            # Try EXIF data first
             exif_data = piexif.load(str(img_path))
             if piexif.ExifIFD.DateTimeOriginal in exif_data['Exif']:
                 date_str = exif_data['Exif'][piexif.ExifIFD.DateTimeOriginal].decode()
@@ -116,196 +202,83 @@ class ImageOrganizer:
         except:
             pass
         
-        # Fall back to file modification date
         try:
             return datetime.fromtimestamp(img_path.stat().st_mtime)
         except:
             return None
     
-    def matches_this_day(self, img_date, reference_date=None):
-        """Check if image was taken on this day in any year"""
-        if img_date is None:
+    def matches_this_day(self, file_date, reference_date=None):
+        if file_date is None:
             return False
         if reference_date is None:
             reference_date = datetime.now()
-        return img_date.month == reference_date.month and img_date.day == reference_date.day
+        return file_date.month == reference_date.month and file_date.day == reference_date.day
+    
+    def is_video_file(self, file_path):
+        return file_path.suffix.lower() in self.video_extensions
         
     def setup_ui(self):
-        # Top bar with folder selection and counter
         top_frame = tk.Frame(self.root, bg='#2b2b2b', pady=10)
         top_frame.pack(fill=tk.X)
         
-        tk.Button(
-            top_frame, 
-            text="Select Folder", 
-            command=self.select_folder,
-            bg='#4CAF50',
-            fg='white',
-            font=('Arial', 12, 'bold'),
-            padx=20,
-            pady=5,
-            cursor='hand2'
-        ).pack(side=tk.LEFT, padx=10)
+        tk.Button(top_frame, text="Select Folder", command=self.select_folder, bg='#4CAF50', fg='white',
+                 font=('Arial', 12, 'bold'), padx=20, pady=5, cursor='hand2').pack(side=tk.LEFT, padx=10)
         
-        self.counter_label = tk.Label(
-            top_frame,
-            text="No images loaded",
-            bg='#2b2b2b',
-            fg='white',
-            font=('Arial', 12)
-        )
+        tk.Button(top_frame, text="🧹 Clean Thumbnails", command=self.clean_thumbnails, bg='#9C27B0', fg='white',
+                 font=('Arial', 10), padx=15, pady=5, cursor='hand2').pack(side=tk.LEFT, padx=5)
+        
+        self.counter_label = tk.Label(top_frame, text="No files loaded", bg='#2b2b2b', fg='white', font=('Arial', 12))
         self.counter_label.pack(side=tk.LEFT, padx=20)
         
-        # Random mode checkbox
         self.random_var = tk.BooleanVar(value=False)
-        self.random_check = tk.Checkbutton(
-            top_frame,
-            text="Random Order",
-            variable=self.random_var,
-            command=self.toggle_random_mode,
-            bg='#2b2b2b',
-            fg='white',
-            selectcolor='#1a1a1a',
-            font=('Arial', 10),
-            cursor='hand2'
-        )
-        self.random_check.pack(side=tk.LEFT, padx=10)
+        tk.Checkbutton(top_frame, text="Random Order", variable=self.random_var, command=self.toggle_random_mode,
+                      bg='#2b2b2b', fg='white', selectcolor='#1a1a1a', font=('Arial', 10), cursor='hand2').pack(side=tk.LEFT, padx=10)
         
-        # Include subdirectories checkbox
         self.subdirs_var = tk.BooleanVar(value=True)
-        self.subdirs_check = tk.Checkbutton(
-            top_frame,
-            text="Include Subdirectories",
-            variable=self.subdirs_var,
-            command=self.toggle_subdirs,
-            bg='#2b2b2b',
-            fg='white',
-            selectcolor='#1a1a1a',
-            font=('Arial', 10),
-            cursor='hand2'
-        )
-        self.subdirs_check.pack(side=tk.LEFT, padx=10)
+        tk.Checkbutton(top_frame, text="Include Subdirectories", variable=self.subdirs_var, command=self.toggle_subdirs,
+                      bg='#2b2b2b', fg='white', selectcolor='#1a1a1a', font=('Arial', 10), cursor='hand2').pack(side=tk.LEFT, padx=10)
         
-        # On This Day checkbox
         self.this_day_var = tk.BooleanVar(value=False)
-        self.this_day_check = tk.Checkbutton(
-            top_frame,
-            text="📅 On This Day",
-            variable=self.this_day_var,
-            command=self.toggle_this_day,
-            bg='#2b2b2b',
-            fg='#FFD700',
-            selectcolor='#1a1a1a',
-            font=('Arial', 10, 'bold'),
-            cursor='hand2'
-        )
-        self.this_day_check.pack(side=tk.LEFT, padx=10)
+        tk.Checkbutton(top_frame, text="📅 On This Day", variable=self.this_day_var, command=self.toggle_this_day,
+                      bg='#2b2b2b', fg='#FFD700', selectcolor='#1a1a1a', font=('Arial', 10, 'bold'), cursor='hand2').pack(side=tk.LEFT, padx=10)
         
-        # Stats label
-        self.stats_label = tk.Label(
-            top_frame,
-            text="Processed: 0 | Deleted: 0 | Saved: 0 MB",
-            bg='#2b2b2b',
-            fg='#888888',
-            font=('Arial', 9)
-        )
+        self.stats_label = tk.Label(top_frame, text="Processed: 0 | Deleted: 0 | Saved: 0 MB",
+                                    bg='#2b2b2b', fg='#888888', font=('Arial', 9))
         self.stats_label.pack(side=tk.LEFT, padx=20)
         
-        # Image display area
-        self.canvas = tk.Canvas(
-            self.root,
-            bg='#1a1a1a',
-            highlightthickness=0
-        )
+        self.canvas = tk.Canvas(self.root, bg='#1a1a1a', highlightthickness=0, cursor='hand2')
         self.canvas.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        self.canvas.bind('<Button-1>', self.on_canvas_click)
         
-        # Date label (shows when photo was taken)
-        self.date_label = tk.Label(
-            self.root,
-            text="",
-            bg='#2b2b2b',
-            fg='#FFD700',
-            font=('Arial', 10, 'bold')
-        )
+        self.date_label = tk.Label(self.root, text="", bg='#2b2b2b', fg='#FFD700', font=('Arial', 10, 'bold'))
         self.date_label.pack(pady=(5, 0))
         
-        # Filename label
-        self.path_label = tk.Label(
-            self.root,
-            text="",
-            bg='#2b2b2b',
-            fg='#888888',
-            font=('Arial', 9)
-        )
+        self.media_type_label = tk.Label(self.root, text="", bg='#2b2b2b', fg='#00BFFF', font=('Arial', 9, 'italic'))
+        self.media_type_label.pack(pady=(0, 5))
+        
+        self.path_label = tk.Label(self.root, text="", bg='#2b2b2b', fg='#888888', font=('Arial', 9))
         self.path_label.pack(pady=(5, 0))
         
-        self.filename_label = tk.Label(
-            self.root,
-            text="",
-            bg='#2b2b2b',
-            fg='#cccccc',
-            font=('Arial', 10)
-        )
+        self.filename_label = tk.Label(self.root, text="", bg='#2b2b2b', fg='#cccccc', font=('Arial', 10))
         self.filename_label.pack(pady=(0, 5))
         
-        # Button frame
         button_frame = tk.Frame(self.root, bg='#2b2b2b', pady=20)
         button_frame.pack()
         
-        # Delete button (Q key)
-        self.delete_btn = tk.Button(
-            button_frame,
-            text="✕ DELETE\n(Q)",
-            command=self.delete_image,
-            bg='#f44336',
-            fg='white',
-            font=('Arial', 14, 'bold'),
-            width=15,
-            height=3,
-            cursor='hand2',
-            state=tk.DISABLED
-        )
+        self.delete_btn = tk.Button(button_frame, text="✕ DELETE\n(Q)", command=self.delete_image, bg='#f44336', fg='white',
+                                    font=('Arial', 14, 'bold'), width=15, height=3, cursor='hand2', state=tk.DISABLED)
         self.delete_btn.pack(side=tk.LEFT, padx=20)
         
-        # Undo button
-        self.undo_btn = tk.Button(
-            button_frame,
-            text="↶ UNDO\n(Backspace)",
-            command=self.undo_delete,
-            bg='#FF9800',
-            fg='white',
-            font=('Arial', 14, 'bold'),
-            width=15,
-            height=3,
-            cursor='hand2',
-            state=tk.DISABLED
-        )
+        self.undo_btn = tk.Button(button_frame, text="↶ UNDO\n(Backspace)", command=self.undo_delete, bg='#FF9800', fg='white',
+                                  font=('Arial', 14, 'bold'), width=15, height=3, cursor='hand2', state=tk.DISABLED)
         self.undo_btn.pack(side=tk.LEFT, padx=20)
         
-        # Keep button (W key)
-        self.keep_btn = tk.Button(
-            button_frame,
-            text="✓ KEEP\n(W)",
-            command=self.keep_image,
-            bg='#4CAF50',
-            fg='white',
-            font=('Arial', 14, 'bold'),
-            width=15,
-            height=3,
-            cursor='hand2',
-            state=tk.DISABLED
-        )
+        self.keep_btn = tk.Button(button_frame, text="✓ KEEP\n(W)", command=self.keep_image, bg='#4CAF50', fg='white',
+                                  font=('Arial', 14, 'bold'), width=15, height=3, cursor='hand2', state=tk.DISABLED)
         self.keep_btn.pack(side=tk.LEFT, padx=20)
         
-        # Instructions
-        instructions = tk.Label(
-            self.root,
-            text="Keyboard shortcuts: Q = Delete | W = Keep | ← = Previous | → = Next | Backspace = Undo",
-            bg='#2b2b2b',
-            fg='#888888',
-            font=('Arial', 9)
-        )
-        instructions.pack(pady=5)
+        tk.Label(self.root, text="Keyboard: Q = Delete | W = Keep | ← = Previous | → = Next | Backspace = Undo | Click video to play",
+                bg='#2b2b2b', fg='#888888', font=('Arial', 9)).pack(pady=5)
         
     def bind_keys(self):
         self.root.bind('<Left>', lambda e: self.previous_image())
@@ -315,9 +288,73 @@ class ImageOrganizer:
         self.root.bind('w', lambda e: self.keep_image())
         self.root.bind('W', lambda e: self.keep_image())
         self.root.bind('<BackSpace>', lambda e: self.undo_delete())
+    
+    def on_canvas_click(self, event):
+        if self.current_file_is_video and self.images and self.current_index < len(self.images):
+            file_path = self.images[self.current_index]
+            try:
+                if sys.platform == 'win32':
+                    os.startfile(str(file_path))
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', str(file_path)])
+                else:
+                    subprocess.run(['xdg-open', str(file_path)])
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not open video: {str(e)}")
+    
+    def clean_thumbnails(self):
+        """Remove orphaned thumbnails for videos that no longer exist"""
+        if not self.thumbnails_dir.exists():
+            messagebox.showinfo("Clean Thumbnails", "No thumbnails folder found.")
+            return
+        
+        try:
+            # Get all thumbnail files
+            thumbnail_files = list(self.thumbnails_dir.glob('*.jpg'))
+            
+            if not thumbnail_files:
+                messagebox.showinfo("Clean Thumbnails", "No thumbnails to clean.")
+                return
+            
+            # Get all video paths from database
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT filepath, thumbnail_path FROM image_cache WHERE is_video = 1')
+            video_records = cursor.fetchall()
+            conn.close()
+            
+            orphaned = []
+            for thumb_file in thumbnail_files:
+                # Check if this thumbnail belongs to an existing video
+                is_orphaned = True
+                for video_path, thumb_path in video_records:
+                    if thumb_path and Path(thumb_path) == thumb_file:
+                        # Check if the video still exists
+                        if Path(video_path).exists():
+                            is_orphaned = False
+                            break
+                
+                if is_orphaned:
+                    orphaned.append(thumb_file)
+            
+            if not orphaned:
+                messagebox.showinfo("Clean Thumbnails", "No orphaned thumbnails found. All clean!")
+                return
+            
+            # Ask for confirmation
+            size_mb = sum(f.stat().st_size for f in orphaned) / (1024 * 1024)
+            if messagebox.askyesno("Clean Thumbnails", 
+                                  f"Found {len(orphaned)} orphaned thumbnail(s) ({size_mb:.1f} MB).\n\nDelete them?"):
+                for thumb_file in orphaned:
+                    thumb_file.unlink()
+                
+                messagebox.showinfo("Clean Thumbnails", 
+                                   f"Deleted {len(orphaned)} orphaned thumbnail(s), freed {size_mb:.1f} MB.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not clean thumbnails: {str(e)}")
         
     def select_folder(self):
-        folder = filedialog.askdirectory(title="Select folder with images")
+        folder = filedialog.askdirectory(title="Select folder with images and videos")
         if folder:
             self.processed_count = 0
             self.deleted_count = 0
@@ -329,9 +366,7 @@ class ImageOrganizer:
         self.include_subdirs = self.subdirs_var.get()
     
     def toggle_this_day(self):
-        """Toggle On This Day mode and reload images if folder is already selected"""
         self.on_this_day_mode = self.this_day_var.get()
-        # If images are already loaded, re-filter them
         if hasattr(self, 'current_folder') and self.current_folder:
             self.load_images(self.current_folder)
             
@@ -340,53 +375,51 @@ class ImageOrganizer:
         self.images = []
         path = Path(folder)
         
-        # Show loading message for On This Day mode
         if self.on_this_day_mode:
-            self.counter_label.config(text="Scanning for 'On This Day' photos...")
+            self.counter_label.config(text="Scanning for 'On This Day' files...")
             self.root.update()
         
-        # Recursively or non-recursively find image files based on checkbox
+        all_extensions = self.image_extensions | self.video_extensions
+        
         if self.include_subdirs:
-            for ext in self.image_extensions:
+            for ext in all_extensions:
                 self.images.extend(path.rglob(f'*{ext}'))
                 self.images.extend(path.rglob(f'*{ext.upper()}'))
         else:
-            for ext in self.image_extensions:
+            for ext in all_extensions:
                 self.images.extend(path.glob(f'*{ext}'))
                 self.images.extend(path.glob(f'*{ext.upper()}'))
         
-        # Remove duplicates and sort
         self.images = sorted(list(set(self.images)))
         
-        # Filter by "On This Day" if enabled
         if self.on_this_day_mode:
-            total_images = len(self.images)
-            filtered_images = []
-            for i, img in enumerate(self.images):
-                # Update progress every 100 images
+            total_files = len(self.images)
+            filtered_files = []
+            for i, file in enumerate(self.images):
                 if i % 100 == 0:
-                    self.counter_label.config(text=f"Scanning {i}/{total_images}...")
+                    self.counter_label.config(text=f"Scanning {i}/{total_files}...")
                     self.root.update()
                 
-                img_date = self.get_cached_date(img)
-                if self.matches_this_day(img_date):
-                    filtered_images.append((img, img_date))
+                file_date = self.get_cached_date(file)
+                if self.matches_this_day(file_date):
+                    # Strip timezone if present for consistent sorting
+                    if file_date and file_date.tzinfo is not None:
+                        file_date = file_date.replace(tzinfo=None)
+                    filtered_files.append((file, file_date))
             
-            # Sort by year (oldest first) to show progression over years
-            filtered_images.sort(key=lambda x: x[1] if x[1] else datetime.min)
-            self.images = [img for img, date in filtered_images]
+            filtered_files.sort(key=lambda x: x[1] if x[1] else datetime.min)
+            self.images = [file for file, date in filtered_files]
             
             if not self.images:
                 today = datetime.now().strftime('%B %d')
-                messagebox.showinfo("No Memories", f"No photos found from {today} in previous years.")
-                self.counter_label.config(text="No images loaded")
+                messagebox.showinfo("No Memories", f"No photos or videos found from {today} in previous years.")
+                self.counter_label.config(text="No files loaded")
                 return
         
         if not self.images:
-            messagebox.showinfo("No Images", "No images found in the selected folder.")
+            messagebox.showinfo("No Files", "No images or videos found in the selected folder.")
             return
         
-        # Apply random order if enabled (but not in On This Day mode)
         if self.random_mode and not self.on_this_day_mode:
             random.shuffle(self.images)
             
@@ -397,7 +430,6 @@ class ImageOrganizer:
     
     def toggle_random_mode(self):
         self.random_mode = self.random_var.get()
-        # If images are already loaded, reshuffle or resort
         if self.images:
             if self.random_mode:
                 random.shuffle(self.images)
@@ -405,10 +437,33 @@ class ImageOrganizer:
                 self.images = sorted(self.images)
             self.current_index = 0
             self.show_current_image()
+    
+    def create_play_overlay(self, img):
+        draw = ImageDraw.Draw(img, 'RGBA')
+        width, height = img.size
+        
+        overlay = Image.new('RGBA', img.size, (0, 0, 0, 100))
+        img = Image.alpha_composite(img.convert('RGBA'), overlay)
+        
+        center_x, center_y = width // 2, height // 2
+        triangle_size = min(width, height) // 6
+        
+        draw = ImageDraw.Draw(img)
+        points = [(center_x - triangle_size//2, center_y - triangle_size),
+                 (center_x - triangle_size//2, center_y + triangle_size),
+                 (center_x + triangle_size, center_y)]
+        draw.polygon(points, fill=(255, 255, 255, 200))
+        
+        text = "Click to play in VLC"
+        text_x = center_x - len(text) * 3
+        text_y = center_y + triangle_size + 20
+        draw.text((text_x, text_y), text, fill=(255, 255, 255, 230))
+        
+        return img.convert('RGB')
         
     def show_current_image(self):
         if not self.images or self.current_index >= len(self.images):
-            messagebox.showinfo("Done!", "All images have been reviewed!")
+            messagebox.showinfo("Done!", "All files have been reviewed!")
             self.delete_btn.config(state=tk.DISABLED)
             self.keep_btn.config(state=tk.DISABLED)
             self.counter_label.config(text="All done!")
@@ -416,13 +471,13 @@ class ImageOrganizer:
             self.path_label.config(text="")
             self.filename_label.config(text="")
             self.date_label.config(text="")
+            self.media_type_label.config(text="")
             return
             
-        img_path = self.images[self.current_index]
+        file_path = self.images[self.current_index]
         
         try:
-            # Check if file exists (may have been deleted)
-            if not img_path.exists():
+            if not file_path.exists():
                 if self.current_index < len(self.images) - 1:
                     self.current_index += 1
                     self.show_current_image()
@@ -431,33 +486,40 @@ class ImageOrganizer:
                     self.show_current_image()
                 return
             
-            # Load and resize image
-            if img_path.suffix.lower() in ['.heic', '.heif']:
-                try:
-                    import pillow_heif
-                    heif_file = pillow_heif.read_heif(str(img_path))
-                    img = Image.frombytes(
-                        heif_file.mode,
-                        heif_file.size,
-                        heif_file.data,
-                        "raw",
-                    )
-                except Exception as heic_error:
-                    # Fallback: try opening with Pillow directly (some HEIC files work this way)
-                    try:
-                        img = Image.open(img_path)
-                    except:
-                        # If both methods fail, raise the original error
-                        raise heic_error
-            else:
-                img = Image.open(img_path)
+            self.current_file_is_video = self.is_video_file(file_path)
             
-            # Get canvas size
+            if self.current_file_is_video:
+                thumb_path = self.generate_video_thumbnail(file_path)
+                if thumb_path and thumb_path.exists():
+                    img = Image.open(thumb_path)
+                    img = self.create_play_overlay(img)
+                else:
+                    img = Image.new('RGB', (800, 600), color='#1a1a1a')
+                    draw = ImageDraw.Draw(img)
+                    text = "Video Preview Unavailable\nClick to play in VLC"
+                    draw.text((400, 300), text, fill='white', anchor='mm')
+                
+                self.media_type_label.config(text="🎬 VIDEO (click to play)")
+            else:
+                if file_path.suffix.lower() in ['.heic', '.heif']:
+                    try:
+                        import pillow_heif
+                        heif_file = pillow_heif.read_heif(str(file_path))
+                        img = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data, "raw")
+                    except Exception as heic_error:
+                        try:
+                            img = Image.open(file_path)
+                        except:
+                            raise heic_error
+                else:
+                    img = Image.open(file_path)
+                
+                self.media_type_label.config(text="📷 IMAGE")
+            
             self.root.update()
             canvas_width = self.canvas.winfo_width()
             canvas_height = self.canvas.winfo_height()
             
-            # Calculate scaling
             img_width, img_height = img.size
             scale = min(canvas_width / img_width, canvas_height / img_height, 1)
             
@@ -466,67 +528,59 @@ class ImageOrganizer:
             
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
-            # Convert to PhotoImage
             self.photo = ImageTk.PhotoImage(img)
             
-            # Display on canvas (centered)
             self.canvas.delete("all")
             x = canvas_width // 2
             y = canvas_height // 2
             self.canvas.create_image(x, y, image=self.photo, anchor=tk.CENTER)
             
-            # Update labels
-            self.counter_label.config(
-                text=f"Image {self.current_index + 1} of {len(self.images)}"
-            )
+            self.counter_label.config(text=f"File {self.current_index + 1} of {len(self.images)}")
             
-            # Show date when photo was taken
-            img_date = self.get_cached_date(img_path)
-            if img_date:
-                years_ago = datetime.now().year - img_date.year
-                date_text = img_date.strftime('%B %d, %Y')
+            file_date = self.get_cached_date(file_path)
+            if file_date:
+                years_ago = datetime.now().year - file_date.year
+                date_text = file_date.strftime('%B %d, %Y')
                 if years_ago > 0:
                     date_text += f" ({years_ago} year{'s' if years_ago != 1 else ''} ago)"
                 self.date_label.config(text=f"📅 {date_text}")
             else:
                 self.date_label.config(text="")
             
-            self.path_label.config(text=str(img_path.parent))
-            self.filename_label.config(text=img_path.name)
+            self.path_label.config(text=str(file_path.parent))
+            self.filename_label.config(text=file_path.name)
             
         except Exception as e:
-            error_msg = f"Could not load image: {img_path.name}\n\nError: {str(e)}\n\n"
-            if img_path.suffix.lower() in ['.heic', '.heif']:
-                error_msg += "This is a HEIC file. Make sure you have installed:\npip install pillow-heif\n\n"
-            error_msg += "Skip to next image?"
+            error_msg = f"Could not load file: {file_path.name}\n\nError: {str(e)}\n\nSkip to next file?"
+            if file_path.suffix.lower() in ['.heic', '.heif']:
+                error_msg = f"HEIC Error: {str(e)}\nTry: pip install pillow-heif\n\nSkip?"
             
-            if messagebox.askyesno("Error Loading Image", error_msg):
+            if messagebox.askyesno("Error Loading File", error_msg):
                 if self.current_index < len(self.images) - 1:
                     self.current_index += 1
                     self.show_current_image()
                 else:
-                    messagebox.showinfo("Done!", "No more images to display.")
+                    messagebox.showinfo("Done!", "No more files to display.")
             
     def delete_image(self):
         if not self.images or self.current_index >= len(self.images):
             return
             
-        img_path = self.images[self.current_index]
+        file_path = self.images[self.current_index]
         
         try:
-            file_size_bytes = img_path.stat().st_size
+            file_size_bytes = file_path.stat().st_size
             file_size_mb = file_size_bytes / (1024 * 1024)
             
-            winshell.delete_file(str(img_path), no_confirm=True, allow_undo=True)
+            winshell.delete_file(str(file_path), no_confirm=True, allow_undo=True)
             
-            # Remove from database cache when deleted
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute('DELETE FROM image_cache WHERE filepath = ?', (str(img_path),))
+            cursor.execute('DELETE FROM image_cache WHERE filepath = ?', (str(file_path),))
             conn.commit()
             conn.close()
             
-            self.last_deleted = img_path
+            self.last_deleted = file_path
             self.last_deleted_size = file_size_mb
             self.undo_btn.config(state=tk.NORMAL)
             self.deleted_count += 1
@@ -545,20 +599,25 @@ class ImageOrganizer:
         try:
             winshell.undelete(str(self.last_deleted))
             
-            # Re-add to cache when restored
-            img_date = self.extract_image_date(self.last_deleted)
+            is_video = self.is_video_file(self.last_deleted)
+            
+            if is_video:
+                file_date = self.get_video_date(self.last_deleted)
+                thumbnail_path = self.generate_video_thumbnail(self.last_deleted)
+            else:
+                file_date = self.extract_image_date(self.last_deleted)
+                thumbnail_path = None
+            
             file_size = self.last_deleted.stat().st_size
             current_mtime = self.last_deleted.stat().st_mtime
             
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO image_cache (filepath, date_taken, file_size, last_modified)
-                VALUES (?, ?, ?, ?)
-            ''', (str(self.last_deleted), 
-                  img_date.isoformat() if img_date else None,
-                  file_size,
-                  current_mtime))
+                INSERT OR REPLACE INTO image_cache (filepath, date_taken, file_size, last_modified, is_video, thumbnail_path)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (str(self.last_deleted), file_date.isoformat() if file_date else None, file_size, current_mtime,
+                  1 if is_video else 0, str(thumbnail_path) if thumbnail_path else None))
             conn.commit()
             conn.close()
             
@@ -571,7 +630,7 @@ class ImageOrganizer:
             self.last_deleted_size = 0
             self.stats_label.config(text=f"Processed: {self.processed_count} | Deleted: {self.deleted_count} | Saved: {self.space_saved_mb:.1f} MB")
         except Exception as e:
-            messagebox.showerror("Error", f"Could not restore file: {str(e)}\nYou may need to restore it manually from Recycle Bin.")
+            messagebox.showerror("Error", f"Could not restore file: {str(e)}\nRestore manually from Recycle Bin.")
             
     def keep_image(self):
         if not self.images or self.current_index >= len(self.images):
