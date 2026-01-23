@@ -2,13 +2,15 @@ _Disclaimer: This has been entirely coded using AI. **I have tested it a few tim
 
 ## Purpose
 
-On iOS there exist many apps which present to you photos one by one and you can decide to keep or delete them with a single swipe left or right respectively. Despite the long and rich history of development on Windows, I couldnt find any such tool. In fact the one that sounded like it had the closest thing to it cost $249 a YEAR.
+On iOS there exist many apps which present to you photos/videos one by one and you can decide to keep or delete them with a single swipe left or right respectively. Despite the long and rich history of development on Windows, I couldnt find any such tool. In fact the one that sounded like it had the closest thing to it cost $249 a YEAR.
 
 So I 'made' this.
 
-This script when run will present a GUI which allows us to then select a folder. All images within this folder will be presented individually and you have the option to delete (left arrow or 'd') or keep (right arrow or 'k') the image.
+This script when run will present a GUI which allows us to then select a folder. All images/videos within this folder will be presented individually and you have the option to delete (left arrow or 'd') or keep (right arrow or 'k') the image.
 
 Images kept will remain untouched, images selected for deletion will be sent to the recycle bin.
+
+You have the option to select random images from a folder, select a specific date or utilise an 'On This Day' Feature.
 
 ##  Requirements
 
@@ -16,7 +18,7 @@ Images kept will remain untouched, images selected for deletion will be sent to 
 - The following packages must be installed for the script to work:
 
 ```
-pip install Pillow pywin32 winshell pillow-heif piexif
+pip install Pillow pywin32 winshell pillow-heif piexif tkcalendar
 ```
 
 ## Usage
@@ -39,4 +41,4 @@ This will bring up the GUI
 
 ## Notes
 
-- For future improvements I will consider adding video support
+- Now with video support!
