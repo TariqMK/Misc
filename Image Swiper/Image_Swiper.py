@@ -1,3 +1,34 @@
+"""
+Image & Video Organizer - "On This Day" Feature
+
+REQUIRED PACKAGES:
+Install all dependencies with pip before running this script:
+
+    pip install pillow piexif pillow-heif winshell tkcalendar
+
+Package details:
+- pillow: Image processing and display
+- piexif: EXIF metadata extraction from photos
+- pillow-heif: HEIC/HEIF image format support (iPhone photos)
+- winshell: Windows recycle bin operations (delete/undo)
+- tkcalendar: Calendar widget for date picker
+
+OPTIONAL (for video support):
+- ffmpeg: Must be installed and added to system PATH for video thumbnails
+  Download from: https://ffmpeg.org/download.html
+  Or install via chocolatey: choco install ffmpeg
+
+FEATURES:
+- Browse photos/videos one-by-one with keep/delete options
+- "On This Day" - view photos from this date in previous years
+- Date picker - view photos from a specific date
+- Video support with click-to-play in VLC
+- SQLite caching for fast scanning
+- Thumbnail cleanup for videos
+- Undo last deletion
+- Stats tracking (files processed, deleted, space saved)
+"""
+
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk, ImageDraw
@@ -34,6 +65,8 @@ class ImageOrganizer:
         self.random_mode = False
         self.include_subdirs = True
         self.on_this_day_mode = False
+        self.specific_date_mode = False
+        self.target_date = None
         self.last_deleted = None
         self.last_deleted_size = 0
         self.processed_count = 0
@@ -214,6 +247,24 @@ class ImageOrganizer:
             reference_date = datetime.now()
         return file_date.month == reference_date.month and file_date.day == reference_date.day
     
+    def matches_specific_date(self, file_date, target_date):
+        if file_date is None or target_date is None:
+            return False
+        return (file_date.year == target_date.year and 
+                file_date.month == target_date.month and 
+                file_date.day == target_date.day)
+    
+    def format_file_size(self, size_bytes):
+        """Convert bytes to human readable format"""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        elif size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        elif size_bytes < 1024 * 1024 * 1024:
+            return f"{size_bytes / (1024 * 1024):.1f} MB"
+        else:
+            return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+    
     def is_video_file(self, file_path):
         return file_path.suffix.lower() in self.video_extensions
         
@@ -242,6 +293,9 @@ class ImageOrganizer:
         tk.Checkbutton(top_frame, text="📅 On This Day", variable=self.this_day_var, command=self.toggle_this_day,
                       bg='#2b2b2b', fg='#FFD700', selectcolor='#1a1a1a', font=('Arial', 10, 'bold'), cursor='hand2').pack(side=tk.LEFT, padx=10)
         
+        tk.Button(top_frame, text="📆 Pick Date", command=self.pick_specific_date, bg='#2196F3', fg='white',
+                 font=('Arial', 10), padx=15, pady=5, cursor='hand2').pack(side=tk.LEFT, padx=5)
+        
         self.stats_label = tk.Label(top_frame, text="Processed: 0 | Deleted: 0 | Saved: 0 MB",
                                     bg='#2b2b2b', fg='#888888', font=('Arial', 9))
         self.stats_label.pack(side=tk.LEFT, padx=20)
@@ -261,6 +315,9 @@ class ImageOrganizer:
         
         self.filename_label = tk.Label(self.root, text="", bg='#2b2b2b', fg='#cccccc', font=('Arial', 10))
         self.filename_label.pack(pady=(0, 5))
+        
+        self.filesize_label = tk.Label(self.root, text="", bg='#2b2b2b', fg='#888888', font=('Arial', 9))
+        self.filesize_label.pack(pady=(0, 5))
         
         button_frame = tk.Frame(self.root, bg='#2b2b2b', pady=20)
         button_frame.pack()
@@ -367,8 +424,135 @@ class ImageOrganizer:
     
     def toggle_this_day(self):
         self.on_this_day_mode = self.this_day_var.get()
+        if self.on_this_day_mode:
+            self.specific_date_mode = False  # Disable specific date mode
         if hasattr(self, 'current_folder') and self.current_folder:
             self.load_images(self.current_folder)
+    
+    def pick_specific_date(self):
+        """Open a calendar date picker dialog"""
+        try:
+            from tkcalendar import Calendar
+        except ImportError:
+            messagebox.showerror("Missing Library", 
+                               "tkcalendar is not installed.\n\nInstall it with:\npip install tkcalendar\n\nFalling back to simple date picker...")
+            self.pick_specific_date_simple()
+            return
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Pick a Specific Date")
+        dialog.geometry("350x400")
+        dialog.configure(bg='#2b2b2b')
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        tk.Label(dialog, text="Select Date:", bg='#2b2b2b', fg='white', font=('Arial', 12, 'bold')).pack(pady=10)
+        
+        # Calendar widget
+        cal = Calendar(dialog, selectmode='day', year=datetime.now().year, 
+                      month=datetime.now().month, day=datetime.now().day,
+                      background='#4CAF50', foreground='white', 
+                      headersbackground='#2b2b2b', headersforeground='white',
+                      selectbackground='#FF9800', selectforeground='white',
+                      weekendbackground='#3a3a3a', weekendforeground='white',
+                      othermonthbackground='#1a1a1a', othermonthforeground='#666666')
+        cal.pack(pady=20, padx=20)
+        
+        def apply_date():
+            selected = cal.get_date()
+            try:
+                # Parse the date (format: m/d/yy)
+                self.target_date = datetime.strptime(selected, '%m/%d/%y')
+                self.specific_date_mode = True
+                self.on_this_day_mode = False
+                self.this_day_var.set(False)
+                dialog.destroy()
+                if hasattr(self, 'current_folder') and self.current_folder:
+                    self.load_images(self.current_folder)
+            except ValueError:
+                messagebox.showerror("Invalid Date", "Could not parse selected date")
+        
+        def clear_filter():
+            self.specific_date_mode = False
+            self.target_date = None
+            dialog.destroy()
+            if hasattr(self, 'current_folder') and self.current_folder:
+                self.load_images(self.current_folder)
+        
+        btn_frame = tk.Frame(dialog, bg='#2b2b2b')
+        btn_frame.pack(pady=15)
+        
+        tk.Button(btn_frame, text="Apply", command=apply_date, bg='#4CAF50', fg='white', 
+                 font=('Arial', 10, 'bold'), padx=20, cursor='hand2').pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Clear Filter", command=clear_filter, bg='#f44336', fg='white',
+                 font=('Arial', 10, 'bold'), padx=20, cursor='hand2').pack(side=tk.LEFT, padx=5)
+    
+    def pick_specific_date_simple(self):
+        """Fallback simple date picker if tkcalendar is not installed"""
+        from tkinter import simpledialog
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Pick a Specific Date")
+        dialog.geometry("300x200")
+        dialog.configure(bg='#2b2b2b')
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        tk.Label(dialog, text="Select Date:", bg='#2b2b2b', fg='white', font=('Arial', 12, 'bold')).pack(pady=10)
+        
+        # Year input
+        year_frame = tk.Frame(dialog, bg='#2b2b2b')
+        year_frame.pack(pady=5)
+        tk.Label(year_frame, text="Year:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
+        year_var = tk.StringVar(value=str(datetime.now().year))
+        year_entry = tk.Entry(year_frame, textvariable=year_var, width=10)
+        year_entry.pack(side=tk.LEFT)
+        
+        # Month input
+        month_frame = tk.Frame(dialog, bg='#2b2b2b')
+        month_frame.pack(pady=5)
+        tk.Label(month_frame, text="Month:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
+        month_var = tk.StringVar(value=str(datetime.now().month))
+        month_entry = tk.Entry(month_frame, textvariable=month_var, width=10)
+        month_entry.pack(side=tk.LEFT)
+        
+        # Day input
+        day_frame = tk.Frame(dialog, bg='#2b2b2b')
+        day_frame.pack(pady=5)
+        tk.Label(day_frame, text="Day:", bg='#2b2b2b', fg='white').pack(side=tk.LEFT, padx=5)
+        day_var = tk.StringVar(value=str(datetime.now().day))
+        day_entry = tk.Entry(day_frame, textvariable=day_var, width=10)
+        day_entry.pack(side=tk.LEFT)
+        
+        def apply_date():
+            try:
+                year = int(year_var.get())
+                month = int(month_var.get())
+                day = int(day_var.get())
+                self.target_date = datetime(year, month, day)
+                self.specific_date_mode = True
+                self.on_this_day_mode = False
+                self.this_day_var.set(False)
+                dialog.destroy()
+                if hasattr(self, 'current_folder') and self.current_folder:
+                    self.load_images(self.current_folder)
+            except ValueError:
+                messagebox.showerror("Invalid Date", "Please enter a valid date (YYYY-MM-DD)")
+        
+        def clear_filter():
+            self.specific_date_mode = False
+            self.target_date = None
+            dialog.destroy()
+            if hasattr(self, 'current_folder') and self.current_folder:
+                self.load_images(self.current_folder)
+        
+        btn_frame = tk.Frame(dialog, bg='#2b2b2b')
+        btn_frame.pack(pady=15)
+        
+        tk.Button(btn_frame, text="Apply", command=apply_date, bg='#4CAF50', fg='white', 
+                 font=('Arial', 10, 'bold'), padx=20, cursor='hand2').pack(side=tk.LEFT, padx=5)
+        tk.Button(btn_frame, text="Clear Filter", command=clear_filter, bg='#f44336', fg='white',
+                 font=('Arial', 10, 'bold'), padx=20, cursor='hand2').pack(side=tk.LEFT, padx=5)
             
     def load_images(self, folder):
         self.current_folder = folder
@@ -402,7 +586,6 @@ class ImageOrganizer:
                 
                 file_date = self.get_cached_date(file)
                 if self.matches_this_day(file_date):
-                    # Strip timezone if present for consistent sorting
                     if file_date and file_date.tzinfo is not None:
                         file_date = file_date.replace(tzinfo=None)
                     filtered_files.append((file, file_date))
@@ -413,6 +596,29 @@ class ImageOrganizer:
             if not self.images:
                 today = datetime.now().strftime('%B %d')
                 messagebox.showinfo("No Memories", f"No photos or videos found from {today} in previous years.")
+                self.counter_label.config(text="No files loaded")
+                return
+        
+        elif self.specific_date_mode and self.target_date:
+            total_files = len(self.images)
+            filtered_files = []
+            for i, file in enumerate(self.images):
+                if i % 100 == 0:
+                    self.counter_label.config(text=f"Scanning {i}/{total_files}...")
+                    self.root.update()
+                
+                file_date = self.get_cached_date(file)
+                if self.matches_specific_date(file_date, self.target_date):
+                    if file_date and file_date.tzinfo is not None:
+                        file_date = file_date.replace(tzinfo=None)
+                    filtered_files.append((file, file_date))
+            
+            filtered_files.sort(key=lambda x: x[1] if x[1] else datetime.min)
+            self.images = [file for file, date in filtered_files]
+            
+            if not self.images:
+                date_str = self.target_date.strftime('%B %d, %Y')
+                messagebox.showinfo("No Files", f"No photos or videos found from {date_str}.")
                 self.counter_label.config(text="No files loaded")
                 return
         
@@ -472,6 +678,7 @@ class ImageOrganizer:
             self.filename_label.config(text="")
             self.date_label.config(text="")
             self.media_type_label.config(text="")
+            self.filesize_label.config(text="")
             return
             
         file_path = self.images[self.current_index]
@@ -549,6 +756,10 @@ class ImageOrganizer:
             
             self.path_label.config(text=str(file_path.parent))
             self.filename_label.config(text=file_path.name)
+            
+            # Show file size
+            file_size = file_path.stat().st_size
+            self.filesize_label.config(text=f"Size: {self.format_file_size(file_size)}")
             
         except Exception as e:
             error_msg = f"Could not load file: {file_path.name}\n\nError: {str(e)}\n\nSkip to next file?"
